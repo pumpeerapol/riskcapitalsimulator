@@ -1,0 +1,11 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {DEFAULT_ZONES,buildZones,getZone,strategyEV,tradePayoffs,seededRandom,simulateTrade,runSimulation,buildChartData} from '../src/simulation.mjs';
+const zones=buildZones(DEFAULT_ZONES);
+const settings={riskCapital:20000,winRate:.55,avgR:2,strategy:'Standard',zoneOverride:null,tradesPerDay:3,lossSuspend:true,zones,ms1:50,ms2:100,maxDrawdownPct:20};
+test('zone boundaries and negative-equity protection',()=>{assert.equal(getZone(-2,zones).name,'Shield');assert.equal(getZone(2.5,zones).name,'Seed');assert.equal(getZone(30,zones).name,'Sprint');});
+test('EV matches capped payouts for every strategy',()=>{for(const strategy of ['Standard','Free Ride','Pyramid'])for(const avgR of [.5,2,7])for(const zone of zones){const o={...settings,strategy,avgR,zoneOverride:zone.name,equity:20000};const win=simulateTrade(o,()=>0).pnl/(20000*zone.riskPct/100);const loss=simulateTrade(o,()=>1).pnl/(20000*zone.riskPct/100);assert.ok(Math.abs(strategyEV(.55,avgR,strategy,zone.maxR)-(.55*win+.45*loss))<1e-9);assert.ok(tradePayoffs(avgR,strategy,zone.maxR).win<=zone.maxR);}});
+test('seed reproduces complete paths',()=>{assert.deepEqual(runSimulation(settings,seededRandom(42)),runSimulation(settings,seededRandom(42)));assert.notDeepEqual(runSimulation(settings,seededRandom(42)),runSimulation(settings,seededRandom(43)));});
+test('all losses terminate at drawdown; all wins reach target',()=>{assert.equal(runSimulation(settings,()=>1).stopReason,'drawdown');assert.equal(runSimulation(settings,()=>0).stopReason,'milestone2');});
+test('horizon without target or breach remains maxTrades',()=>{assert.equal(runSimulation({...settings,avgR:0,maxDrawdownPct:100},()=>0).stopReason,'maxTrades');});
+test('failed paths remain in later percentile samples',()=>{const chart=buildChartData([{snapshots:[0,-20],milestone2:null,stopReason:'drawdown'},{snapshots:[0,10,20],milestone2:null,stopReason:'maxTrades'}],100);assert.equal(chart[2].p50,-20);assert.equal(chart[2].pathsDrawdown,1);assert.equal(chart[2].pathsActive,1);});

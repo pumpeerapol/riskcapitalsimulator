@@ -11,6 +11,12 @@
       }
       html, body, #root { height: 100%; }
       body { margin: 0; background: #0b0d14; font-family: var(--font-sans); }
+      button { font: inherit; cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: .55; }
+      :focus-visible { outline: 3px solid #f5a623 !important; outline-offset: 3px; }
+      section[aria-label="Scenario comparison"] button { background: #252a3d; color: #f0f2f8; border: 1px solid #4a526b; border-radius: 6px; padding: 10px 14px; }
+      th, td { vertical-align: top; }
+      summary { cursor: pointer; }
     </style>
   </head>
   <body>
