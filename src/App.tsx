@@ -1,15 +1,16 @@
+import "./interface.css";
 import { useState, useCallback, useMemo, useEffect, useId } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 
-const BG      = "#0b0d14";
-const SURFACE = "#13161f";
-const CARD    = "#1c2030";
-const BORDER  = "#2e3348";
-const TEXT    = "#f0f2f8";
-const MUTED   = "#9ba8c0";
-const DIM     = "#5a6480";
-const GREEN   = "#2ecc8f";
-const GOLD    = "#f5a623";
+const BG      = "#101716";
+const SURFACE = "#17211d";
+const CARD    = "#1f2c25";
+const BORDER  = "#35483b";
+const TEXT    = "#edf0e7";
+const MUTED   = "#b1bfae";
+const DIM     = "#91a18e";
+const GREEN   = "#76cbb0";
+const GOLD    = "#dfc48c";
 const RED     = "#ff6b6b";
 
 const MC_RUNS = 1000;
@@ -289,8 +290,8 @@ export default function App() {
   const runLabel = running ? "Running 1,000 paths…" : !rcValid ? "Enter risk capital to run" : "Run simulation";
 
   const runBtn = (
-    <div><button onClick={simulate} disabled={runDisabled}
-      style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none", background: runDisabled ? DIM : GOLD, color: runDisabled ? MUTED : "#000", fontSize: 14, fontWeight: 700, cursor: runDisabled ? "not-allowed" : "pointer" }}>
+    <div className="run-toolbar"><button onClick={simulate} disabled={runDisabled}
+      style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none", background: runDisabled ? DIM : GOLD, color: runDisabled ? MUTED : "#000", fontSize: 14, fontWeight: 600, cursor: runDisabled ? "not-allowed" : "pointer" }}>
       {runLabel}
     </button>
     {stale && <p role="status" style={{color:GOLD,fontSize:13}}>Inputs changed — rerun to update results.</p>}
@@ -298,7 +299,7 @@ export default function App() {
   );
 
   const zoneStrip = (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 16 }}>
+    <div className="zone-strip" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 16 }}>
       {zones.map(z => (
         <div key={z.name} style={{ background: SURFACE, border: `1px solid ${z.color}55`, borderRadius: 10, padding: "12px 10px" }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: z.color }}>{z.name}</div>
@@ -311,7 +312,7 @@ export default function App() {
   );
 
   const milestones = !stale && summary && (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+    <div className="result-metrics" style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 10 }}>
         <div style={{ background: SURFACE, border: `1px solid ${GREEN}33`, borderRadius: 10, padding: "10px 14px" }}>
           <div style={{ fontSize: 11, color: MUTED, marginBottom: 3 }}>Reached Milestone #2</div>
@@ -360,13 +361,13 @@ export default function App() {
   );
 
   const chart = !stale && results && summary && chartData.length > 0 && (
-    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: "18px 8px 14px 0" }}>
+    <div className="equity-chart" style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: "18px 8px 14px 0" }}>
       <div style={{ fontSize: 13, color: TEXT, marginLeft: 20, marginBottom: 3, fontWeight: 500 }}>Equity percentile bands</div>
       <div style={{ fontSize: 12, color: MUTED, marginLeft: 20, marginBottom: 14 }}>All 1,000 paths retained, including failures · terminal values freeze · chart ends if median crosses +{ms2}%</div>
-      <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={chartData} margin={{ left: 10, right: 44, top: 4, bottom: 4 }}>
+      <ResponsiveContainer width="100%" height={mobile ? 290 : 350}>
+        <LineChart data={chartData} margin={{ left: 10, right: 44, top: 4, bottom: 24 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={BORDER} />
-          <XAxis dataKey="trade" tick={{ fontSize: 11, fill: MUTED }} label={{ value: "Trade opportunities", position: "insideBottomRight", offset: -8, fontSize: 12, fill: MUTED }} />
+          <XAxis dataKey="trade" tick={{ fontSize: 11, fill: MUTED }} label={{ value: "Opportunities", position: "insideBottomRight", offset: -8, fontSize: 12, fill: MUTED }} />
           <YAxis tickFormatter={v => v + "%"} tick={{ fontSize: 11, fill: MUTED }} domain={["dataMin - 5", "dataMax + 5"]} />
           <Tooltip content={<ChartTooltip />} />
           <ReferenceLine y={0} stroke={BORDER} />
@@ -465,7 +466,7 @@ export default function App() {
 
       <div style={{ background: CARD, border: `1px solid ${ev > 0 ? GREEN : RED}44`, borderRadius: 10, padding: "12px 14px" }}>
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Expected value / trade · {evZone.name} <span style={{ color: DIM }}>({strategy})</span></div>
-        <div style={{ fontSize: 22, fontWeight: 600, color: ev > 0 ? GREEN : RED }}>{ev > 0 ? "+" : ""}{ev.toFixed(2)}R</div>
+        <div style={{ fontSize: 30, fontWeight: 500, color: ev > 0 ? GREEN : RED }}>{ev > 0 ? "+" : ""}{ev.toFixed(2)}R</div>
         <div style={{ fontSize: 12, color: ev > 0 ? GREEN : RED, marginTop: 2 }}>{ev > 0 ? "Positive under these assumptions" : "Non-positive under these assumptions"}</div>
       </div>
     </>
@@ -493,7 +494,13 @@ export default function App() {
   );
 
   const placeholder = (h, msg, col = undefined) => (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: h, background: SURFACE, borderRadius: 12, border: `1px solid ${BORDER}`, color: col || DIM, fontSize: 14, textAlign: "center", padding: "0 20px" }}>{msg}</div>
+    <div className="simulation-empty" style={{minHeight:h,color:col||MUTED}}>
+      <div className="empty-orbit" aria-hidden="true"><span/><span/><span/></div>
+      <div className="section-eyebrow">Explore the possibilities</div>
+      <h2>{running ? "Calculating the range…" : stale ? "A new set of possibilities." : "One model. A thousand paths."}</h2>
+      <p>{msg}</p>
+      {!running && <div className="empty-steps"><span>01 · Set your assumptions</span><span>02 · Run the paths</span><span>03 · Compare the outcomes</span></div>}
+    </div>
   );
 
   function saveScenario() {
@@ -503,8 +510,8 @@ export default function App() {
     catch { setSaveMessage("Could not save: browser storage is unavailable."); }
   }
   const comparison = (
-    <section aria-label="Scenario comparison" style={{marginTop:24,padding:18,background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12}}>
-      <h2 style={{fontSize:16,marginTop:0}}>Compare saved scenarios</h2>
+    <section className="scenario-library" aria-label="Scenario comparison" style={{marginTop:24,padding:18,background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12}}>
+      <div className="section-eyebrow">Your research notebook</div><h2 style={{fontSize:24,fontFamily:"Georgia,serif",fontWeight:400,margin:"8px 0 20px"}}>Compare saved scenarios</h2>
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
         <input aria-label="Scenario name" placeholder="Name this run" value={scenarioName} maxLength={80} onChange={e=>setScenarioName(e.target.value)} style={{background:CARD,color:TEXT,padding:10,border:`1px solid ${BORDER}`,borderRadius:6,minWidth:0}} />
         <button disabled={!summary||stale||running} onClick={saveScenario}>Save current results</button>
@@ -523,52 +530,40 @@ export default function App() {
     </section>
   );
 
-  // ── Layout ────────────────────────────────────────────────────
-
+  // Layout shares one set of controls across desktop and mobile.
   return (
-    <div style={{ background: BG, minHeight: "100vh", padding: mobile ? "16px 14px 48px" : "24px 24px 48px", fontFamily: "var(--font-sans)", color: TEXT, boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 600, color: TEXT }}>Risk Capital Simulator</div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 3 }}>Dynamic zone model · 1,000-path Monte Carlo</div>
-      </div>
-
-      <details style={{marginBottom:18,color:MUTED,fontSize:13,lineHeight:1.7}}><summary>Model assumptions</summary>
-        Independent wins/losses, fixed win rate and risk based on starting capital. Free Ride and Pyramid use simplified payoffs, without fees, slippage or intratrade price paths. Auto-zone EV shown is for the starting Shield zone; it changes as equity crosses zones. The horizontal axis counts trade opportunities, including skipped slots during suspension; day estimates are approximate. This is a scenario model, not a forecast.
-      </details>
-      {mobile ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18 }}>
-            <SectionLabel>Parameters</SectionLabel>
-            {controls}
-          </div>
-          {zoneConfig}
-          {zoneStrip}
+    <div className="sim-shell">
+      <header className="suite-header">
+        <a className="suite-brand" href="./"><span className="suite-mark">R</span><span>Risk Capital Simulator<small>A workspace for what could happen.</small></span></a>
+        <nav className="suite-nav" aria-label="Apps"><a href="../sessionprotocol/">Session</a><a href="../goldenbullet/">Challenge</a><a href="../riskcapitalsimulator/" aria-current="page">Simulator</a></nav>
+        <span className="local-tag">Runs in your browser</span>
+      </header>
+      <section className="sim-hero">
+        <div><div className="section-eyebrow">Risk & possibility</div><h1>See the range.<br/><em>Understand the risk.</em></h1><p>Explore how your assumptions shape the outcome.<br className="desktop-break"/> Compare the possibilities before making a decision.</p></div>
+        <div className="run-spec"><div><strong>1,000</strong><span>paths per scenario</span></div><div><strong>500</strong><span>opportunity horizon</span></div><span className="run-state">{running ? "Simulation running" : stale ? "Inputs changed" : results ? "Scenario complete" : "Ready to explore"}</span></div>
+      </section>
+      <div className="sim-layout">
+        <aside className="sim-controls">
           {runBtn}
-          {!results && !running && placeholder(140, rcValid ? "Run simulation to see results" : "Enter risk capital to begin")}
-          {running && placeholder(140, "Running 1,000 paths…", GOLD)}
-          {!running && milestones}
+          <details className="control-panel" open={!mobile}>
+            <summary><span><small>01 / CONFIGURE</small>Scenario parameters</span><span className="expand-sign" aria-hidden="true">+</span></summary>
+            <div className="control-panel-body">{controls}</div>
+          </details>
+          <details className="control-panel zone-editor"><summary><span><small>OPTIONAL / REFINE</small>Risk zone settings</span><span className="expand-sign" aria-hidden="true">+</span></summary><div className="control-panel-body">{zoneConfig}</div></details>
+          <details className="model-notes"><summary>What this model assumes</summary><p>Independent wins/losses, fixed win rate and risk based on starting capital. Free Ride and Pyramid use simplified payoffs, without fees, slippage or intratrade price paths. Auto-zone EV is for the starting Shield zone. The axis counts opportunities, including suspension slots; day estimates are approximate. This is a scenario model, not a forecast.</p></details>
+        </aside>
+        <main className="sim-results">
+          <div className="results-heading"><div><div className="section-eyebrow">02 / EXPLORE</div><h2>Your outcome landscape</h2></div><span>{strategy} · {Math.round(winRate*100)}% wins</span></div>
+          {zoneStrip}
+          {!results && !running && placeholder(380, rcValid ? "Set your parameters, then run a simulation to see the full range of outcomes." : "Enter positive risk capital to begin.")}
+          {stale && !running && placeholder(320,"Your assumptions have changed. Run the simulation to see updated outcomes.")}
+          {running && placeholder(320,"Evaluating 1,000 possible paths with your current assumptions.",GOLD)}
           {!running && chart}
-        </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 18, alignItems: "start" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18 }}>
-              <SectionLabel>Parameters</SectionLabel>
-              {controls}
-            </div>
-            {zoneConfig}
-            {runBtn}
-          </div>
-          <div>
-            {zoneStrip}
-            {!results && !running && placeholder(320, rcValid ? "Set parameters and run simulation" : "Enter risk capital to begin")}
-            {running && placeholder(320, "Running 1,000 paths…", GOLD)}
-            {!running && milestones}
-            {!running && chart}
-          </div>
-        </div>
-      )}
-      {comparison}
+          {!running && milestones}
+          {comparison}
+        </main>
+      </div>
+      <footer className="app-footer">Designed for deliberate decisions. <span>Scenario research · saved locally</span></footer>
     </div>
   );
 }

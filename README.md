@@ -35,3 +35,7 @@ npm run check
 ## Release checks
 
 Before merging, verify desktop and 390px mobile layouts, keyboard focus, reload recovery or result freshness, and any changed data import/export flow. CI runs on pull requests and pushes to main. Production publishing remains separate from PR validation.
+
+## Interface
+
+The chart leads the results workspace. Parameters and zone settings collapse on mobile, the run action stays above configuration, and saved comparisons sit below the outcome summary. Shared app navigation connects all three tools.
