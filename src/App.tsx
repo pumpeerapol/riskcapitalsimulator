@@ -1,159 +1,34 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import "./interface.css";
+import { useState, useCallback, useMemo, useEffect, useId } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 
-const BG      = "#0b0d14";
-const SURFACE = "#13161f";
-const CARD    = "#1c2030";
-const BORDER  = "#2e3348";
-const TEXT    = "#f0f2f8";
-const MUTED   = "#9ba8c0";
-const DIM     = "#5a6480";
-const GREEN   = "#2ecc8f";
-const GOLD    = "#f5a623";
+const BG      = "#101716";
+const SURFACE = "#17211d";
+const CARD    = "#1f2c25";
+const BORDER  = "#35483b";
+const TEXT    = "#edf0e7";
+const MUTED   = "#b1bfae";
+const DIM     = "#91a18e";
+const GREEN   = "#76cbb0";
+const GOLD    = "#dfc48c";
 const RED     = "#ff6b6b";
 
 const MC_RUNS = 1000;
 const STRATEGIES = ["Standard", "Free Ride", "Pyramid"];
-const SPRINT_SYNTHETIC_WIDTH = 70;
+import { DEFAULT_ZONES, SPRINT_SYNTHETIC_WIDTH, buildZones, strategyEV, seededRandom, runSimulation, buildChartData } from "./simulation.mjs";
 
-const DEFAULT_ZONES = [
-  { name: "Shield", color: "#9d8fff", minPct: 0,   riskPct: 1   },
-  { name: "Seed",   color: "#2ecc8f", minPct: 2.5, riskPct: 2.5 },
-  { name: "Scale",  color: "#f5a623", minPct: 15,  riskPct: 5   },
-  { name: "Sprint", color: "#ff6b6b", minPct: 30,  riskPct: 10  },
-];
-
-function buildZones(raw) {
-  return raw.map((z, i) => {
-    const maxPct = i < raw.length - 1 ? raw[i + 1].minPct : null;
-    const width  = maxPct === null ? SPRINT_SYNTHETIC_WIDTH : maxPct - z.minPct;
-    return { ...z, maxPct, maxR: z.riskPct > 0 ? +(width / z.riskPct).toFixed(2) : 0 };
-  });
-}
-
-function getZone(profitPct, zones) {
-  if (profitPct < 0) return zones[0];
-  return zones.find(z => profitPct >= z.minPct && (z.maxPct === null || profitPct < z.maxPct)) || zones[0];
-}
-
-// Strategy EV per trade in R terms (for display). Matches simulation logic.
-function strategyEV(winRate, avgR, strategy) {
-  if (strategy === "Standard") return winRate * avgR - (1 - winRate);
-  if (strategy === "Free Ride") {
-    // avgR >= 2: scale to BE, full runner on wins, -0.5R on losses
-    if (avgR >= 2) return winRate * avgR - (1 - winRate) * 0.5;
-    return winRate * avgR - (1 - winRate);
-  }
-  // Pyramid: effective R = max(1.5*avgR - 0.5, avgR) — matches the max() floor in simulateTrade
-  return winRate * Math.max(1.5 * avgR - 0.5, avgR) - (1 - winRate);
-}
-
-function simulateTrade({ equity, riskCapital, winRate, avgR, strategy, zoneOverride, zones }) {
-  const profitPct = ((equity - riskCapital) / riskCapital) * 100;
-  // Override wins; negative-profit Shield protection applies only in Auto
-  const zone    = zoneOverride ? (zones.find(z => z.name === zoneOverride) || zones[0]) : getZone(profitPct, zones);
-  const risk1R  = riskCapital * (zone.riskPct / 100);
-  const isWin   = Math.random() < winRate;
-  const cappedR = Math.min(avgR, zone.maxR);
-  let pnl = 0;
-  if (strategy === "Standard") {
-    pnl = isWin ? risk1R * cappedR : -risk1R;
-  } else if (strategy === "Free Ride") {
-    // avgR >= 2: scale to BE after reaching 1R, full runner on wins; -0.5R on losses (half stopped at BE)
-    if (avgR >= 2) {
-      pnl = isWin ? risk1R * cappedR : -risk1R * 0.5;
-    } else {
-      pnl = isWin ? risk1R * cappedR : -risk1R; // behaves as Standard below trigger
-    }
-  } else {
-    // Pyramid: 1.5x effective R minus 0.5R add cost, capped by zone maxR
-    const pyramidR = Math.min(1.5 * cappedR - 0.5, zone.maxR);
-    pnl = isWin ? risk1R * Math.max(pyramidR, cappedR) : -risk1R;
-  }
-  return { pnl, isWin };
-}
-
-function runSimulation({ riskCapital, winRate, avgR, strategy, zoneOverride, tradesPerDay, lossSuspend, zones, ms1, ms2, maxDrawdownPct }) {
-  let equity = riskCapital;
-  const floor = riskCapital * (1 - maxDrawdownPct / 100);
-  const snapshots = [0];
-  let consLosses = 0, suspended = 0, milestone1 = null, milestone2 = null, trade = 0;
-  let stopReason = "maxTrades";
-  const MAX_TRADES = 500;
-
-  while (trade < MAX_TRADES) {
-    trade++;
-    // If ms2 already reached, freeze equity and pad snapshots (FTMO: stop trading at target)
-    if (milestone2 !== null) {
-      snapshots.push(snapshots[snapshots.length - 1]);
-      continue;
-    }
-    if (suspended > 0) {
-      suspended--;
-      snapshots.push(+((equity - riskCapital) / riskCapital * 100).toFixed(2));
-      continue;
-    }
-    const { pnl, isWin } = simulateTrade({ equity, riskCapital, winRate, avgR, strategy, zoneOverride, zones });
-    equity = equity + pnl;
-
-    const pct = +((equity - riskCapital) / riskCapital * 100).toFixed(2);
-
-    if (equity <= floor) { stopReason = "drawdown"; snapshots.push(pct); break; }
-
-    if (!milestone1 && pct >= ms1) milestone1 = trade;
-    if (!milestone2 && pct >= ms2) { milestone2 = trade; stopReason = "milestone2"; }
-
-    if (!isWin) { consLosses++; if (lossSuspend && consLosses >= 2) { suspended = Math.max(1, Math.round(tradesPerDay)); consLosses = 0; } } else consLosses = 0;
-    snapshots.push(pct);
-  }
-  return { snapshots, milestone1, milestone2, stopReason };
-}
-
-function pctile(sorted, p) { return sorted[Math.floor(p * (sorted.length - 1))]; }
-
-// Percentile bands across all 1000 paths at every trade index.
-// - Successful paths (hit ms2) freeze at terminal value and stay in the pool — they "stopped trading"
-// - Drawdown paths exit the pool from the trade after they died
-// - Still-running paths contribute current equity
-// Chart cuts off once the median crosses ms2 — that's the question this tool answers
-function buildChartData(results, ms2) {
-  const maxLen = Math.max(...results.map(r => r.snapshots.length));
-  const data = [];
-  for (let i = 0; i < maxLen; i++) {
-    const vals = [];
-    let pathsSucceeded = 0, pathsDrawdown = 0;
-    for (const r of results) {
-      if (r.snapshots[i] !== undefined) {
-        vals.push(r.snapshots[i]);
-      } else if (r.milestone2 !== null) {
-        vals.push(r.snapshots[r.snapshots.length - 1]);
-      }
-      // State counts (tracked separately from percentile sample)
-      if (r.milestone2 !== null && r.milestone2 <= i) pathsSucceeded++;
-      else if (r.stopReason === "drawdown" && r.snapshots.length - 1 <= i) pathsDrawdown++;
-    }
-    if (vals.length === 0) break;
-    vals.sort((a, b) => a - b);
-    const median = pctile(vals, 0.5);
-    const pathsActive = results.length - pathsSucceeded - pathsDrawdown;
-    data.push({
-      trade: i,
-      pathsActive, pathsSucceeded, pathsDrawdown,
-      total: results.length,
-      p10: +pctile(vals,.10).toFixed(1),
-      p25: +pctile(vals,.25).toFixed(1),
-      p50: +median.toFixed(1),
-      p75: +pctile(vals,.75).toFixed(1),
-      p90: +pctile(vals,.90).toFixed(1),
-    });
-    if (median >= ms2) break;
-  }
-  return data;
+type Scenario = { name: string; savedAt: string; inputs: any; summary: any };
+function readScenarios(): Scenario[] {
+  try {
+    const data = JSON.parse(localStorage.getItem("rcs:scenarios:v1") || "[]");
+    return Array.isArray(data) ? data.filter(s => s && typeof s.name === "string" && typeof s.savedAt === "string" && s.inputs && Number.isFinite(s.summary?.hit2) && Number.isFinite(s.summary?.drawdown) && s.summary?.total > 0).slice(0, 6) : [];
+  } catch { return []; }
 }
 
 // ── UI Components ─────────────────────────────────────────────
 
-function StepInput({ label, value, min, max, step, onChange, fmt, allowType, isPercent }) {
+function StepInput({ label, value, min, max, step, onChange, fmt = undefined, allowType = false, isPercent = false }) {
+  const inputId = useId();
   const [raw, setRaw] = useState("");
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState(false);
@@ -188,13 +63,13 @@ function StepInput({ label, value, min, max, step, onChange, fmt, allowType, isP
 
   return (
     <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 13, color: MUTED, marginBottom: 6 }}>{label}</div>
+      <label htmlFor={inputId} style={{ display: "block", fontSize: 13, color: MUTED, marginBottom: 6 }}>{label}</label>
       <div style={{ display: "flex", alignItems: "stretch", border: `1px solid ${error ? RED : BORDER}`, borderRadius: 8, overflow: "hidden", transition: "border-color 0.2s" }}>
-        <button onClick={() => adjust(-1)} style={btnStyle("left")}>−</button>
+        <button aria-label={`Decrease ${label}`} onClick={() => adjust(-1)} style={btnStyle("left")}>−</button>
         {allowType ? (
-          <input type="text" inputMode="decimal"
+          <input id={inputId} type="text" inputMode="decimal"
             value={focused ? raw : displayVal}
-            onFocus={() => { setRaw(""); setFocused(true); setError(false); }}
+            onFocus={() => { setRaw(String(isPercent ? value * 100 : value)); setFocused(true); setError(false); }}
             onBlur={handleBlur}
             onChange={e => setRaw(e.target.value)}
             style={{ flex: 1, textAlign: "center", fontSize: 15, fontWeight: 500, color: TEXT, background: CARD, border: "none", outline: "none", padding: "0 4px", minWidth: 0 }}
@@ -202,14 +77,14 @@ function StepInput({ label, value, min, max, step, onChange, fmt, allowType, isP
         ) : (
           <div style={{ flex: 1, textAlign: "center", fontSize: 15, fontWeight: 500, color: TEXT, background: CARD, display: "flex", alignItems: "center", justifyContent: "center" }}>{displayVal}</div>
         )}
-        <button onClick={() => adjust(1)} style={btnStyle("right")}>+</button>
+        <button aria-label={`Increase ${label}`} onClick={() => adjust(1)} style={btnStyle("right")}>+</button>
       </div>
       {error && <div style={{ fontSize: 11, color: RED, marginTop: 3 }}>Enter a value between {isPercent ? (min*100).toFixed(0)+"%" : (fmt ? fmt(min) : min)} and {isPercent ? (max*100).toFixed(0)+"%" : (fmt ? fmt(max) : max)}</div>}
     </div>
   );
 }
 
-function ClearableNumInput({ value, onChange, min, max, color }) {
+function ClearableNumInput({ value, onChange, min, max, color, label }) {
   const [raw, setRaw] = useState(String(value));
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState(false);
@@ -217,8 +92,8 @@ function ClearableNumInput({ value, onChange, min, max, color }) {
   return (
     <div>
       <div style={{ position: "relative" }}>
-        <input type="text" inputMode="decimal" value={focused ? raw : String(value)}
-          onFocus={() => { setRaw(""); setFocused(true); setError(false); }}
+        <input aria-label={label} type="text" inputMode="decimal" value={focused ? raw : String(value)}
+          onFocus={() => { setRaw(String(value)); setFocused(true); setError(false); }}
           onBlur={() => {
             setFocused(false);
             const n = parseFloat(raw);
@@ -235,13 +110,13 @@ function ClearableNumInput({ value, onChange, min, max, color }) {
 }
 
 // Enforces min/max on blur — clamps out-of-range input and flashes error
-function NumInput({ value, min, max, step = 0.5, onChange }) {
+function NumInput({ value, min, max, step = 0.5, onChange, label }) {
   const [raw, setRaw] = useState(String(value));
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState(false);
   useEffect(() => { if (!focused) setRaw(String(value)); }, [value, focused]);
   return (
-    <input type="text" inputMode="decimal" value={focused ? raw : String(value)}
+    <input aria-label={label} type="text" inputMode="decimal" value={focused ? raw : String(value)}
       onFocus={() => { setRaw(String(value)); setFocused(true); }}
       onBlur={() => {
         setFocused(false);
@@ -258,8 +133,8 @@ function InfoTip({ text }) {
   const [show, setShow] = useState(false);
   return (
     <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
-      <span onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} onClick={() => setShow(s => !s)}
-        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1px solid ${DIM}`, color: MUTED, fontSize: 10, cursor: "pointer", marginLeft: 6 }}>?</span>
+      <button type="button" aria-label="More information" aria-expanded={show} onFocus={() => setShow(true)} onBlur={() => setShow(false)} onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)} onClick={() => setShow(s => !s)}
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", border: `1px solid ${DIM}`, color: MUTED, fontSize: 10, cursor: "pointer", marginLeft: 6, background: "transparent" }}>?</button>
       {show && (
         <span style={{ position: "absolute", left: 22, top: -4, zIndex: 99, background: "#252a3d", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: MUTED, width: 210, lineHeight: 1.6, pointerEvents: "none" }}>
           {text}
@@ -269,18 +144,18 @@ function InfoTip({ text }) {
   );
 }
 
-const ChartTooltip = ({ active, payload, label }) => {
+const ChartTooltip = ({ active = false, payload = [], label = undefined }) => {
   if (!active || !payload?.length) return null;
   const p = payload[0]?.payload;
   return (
     <div style={{ background: "#1c2030ee", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 14px", fontSize: 12 }}>
-      <div style={{ color: MUTED, marginBottom: 4, fontSize: 11 }}>Trade #{label}</div>
+      <div style={{ color: MUTED, marginBottom: 4, fontSize: 11 }}>Opportunity #{label}</div>
       {p && (
         <div style={{ color: DIM, marginBottom: 8, fontSize: 11 }}>
           <span style={{ color: MUTED }}>{p.pathsActive}</span> active · <span style={{ color: GREEN }}>{p.pathsSucceeded}</span> ✓ · <span style={{ color: RED }}>{p.pathsDrawdown}</span> ✗
         </div>
       )}
-      {[["p90","90th",DIM,0.7],["p75","75th",DIM,0.9],["p50","Median",GREEN,1],["p25","25th",DIM,0.9],["p10","10th",DIM,0.7]].map(([k,lbl,col,op]) => {
+      {([["p90","90th",DIM,0.7],["p75","75th",DIM,0.9],["p50","Median",GREEN,1],["p25","25th",DIM,0.9],["p10","10th",DIM,0.7]] as const).map(([k,lbl,col,op]) => {
         const d = payload.find(p => p.dataKey === k);
         if (!d) return null;
         return <div key={k} style={{ color: col, opacity: op, marginBottom: 2 }}>{lbl}: {d.value >= 0 ? "+" : ""}{d.value}%</div>;
@@ -289,7 +164,7 @@ const ChartTooltip = ({ active, payload, label }) => {
   );
 };
 
-function SectionLabel({ children, tip }) {
+function SectionLabel({ children, tip = undefined }) {
   return (
     <div style={{ display: "flex", alignItems: "center", fontSize: 11, fontWeight: 500, color: MUTED, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 10, marginTop: 6 }}>
       {children}{tip && <InfoTip text={tip} />}
@@ -328,15 +203,23 @@ export default function App() {
   const [ms2, setMs2]                       = useState(100);
   const [ms1Error, setMs1Error]             = useState(false);
   const [ms2Error, setMs2Error]             = useState(false);
-  const [results, setResults]               = useState(null);
+  const [results, setResults] = useState(null);
+  const [runInputs, setRunInputs] = useState(null);
+  const [seed, setSeed] = useState(42);
+  const [scenarios, setScenarios] = useState<Scenario[]>(readScenarios);
+  const [scenarioName, setScenarioName] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
   const [running, setRunning]               = useState(false);
   const [rawZones, setRawZones]             = useState(DEFAULT_ZONES);
   const [zoneRejected, setZoneRejected]     = useState(null); // flashes row on invalid update
 
   const zones = useMemo(() => buildZones(rawZones), [rawZones]);
   const rc  = parseFloat(riskCapital) || 0;
-  const rcValid = rc > 0;
-  const ev  = strategyEV(winRate, avgR, strategy);
+  const rcValid = Number.isFinite(rc) && rc > 0;
+  const evZone = zones.find(z => z.name === zoneOverride) || zones[0];
+  const ev = strategyEV(winRate, avgR, strategy, evZone.maxR);
+  const inputs = { riskCapital: rc, winRate, avgR, strategy, zoneOverride, tradesPerDay, lossSuspend, rawZones, ms1, ms2, maxDrawdownPct, seed };
+  const stale = !!runInputs && JSON.stringify(inputs) !== JSON.stringify(runInputs);
 
   const updateZone = (i, field, val) => {
     setRawZones(prev => {
@@ -360,13 +243,15 @@ export default function App() {
     setRunning(true);
     setTimeout(() => {
       const all = [];
+      const random = seededRandom(seed);
       for (let i = 0; i < MC_RUNS; i++) {
-        all.push(runSimulation({ riskCapital: rc, winRate, avgR, strategy, zoneOverride, tradesPerDay, lossSuspend, zones, ms1, ms2, maxDrawdownPct }));
+        all.push(runSimulation({ riskCapital: rc, winRate, avgR, strategy, zoneOverride, tradesPerDay, lossSuspend, zones, ms1, ms2, maxDrawdownPct }, random));
       }
+      setRunInputs(inputs);
       setResults(all);
       setRunning(false);
     }, 20);
-  }, [rc, rcValid, winRate, avgR, strategy, zoneOverride, tradesPerDay, lossSuspend, zones, ms1, ms2, maxDrawdownPct]);
+  }, [rc, rcValid, winRate, avgR, strategy, zoneOverride, tradesPerDay, lossSuspend, zones, ms1, ms2, maxDrawdownPct, seed]);
 
   const { summary, chartData } = useMemo(() => {
     if (!results) return { summary: null, chartData: [] };
@@ -395,9 +280,9 @@ export default function App() {
         min2: hit2.length ? Math.min(...hit2.map(r => r.milestone2)) : null,
         max2: hit2.length ? Math.max(...hit2.map(r => r.milestone2)) : null,
       },
-      chartData: buildChartData(results, ms2)
+      chartData: buildChartData(results, runInputs.ms2)
     };
-  }, [results, ms2]);
+  }, [results, runInputs]);
 
   // ── Shared UI blocks ──────────────────────────────────────────
 
@@ -405,14 +290,16 @@ export default function App() {
   const runLabel = running ? "Running 1,000 paths…" : !rcValid ? "Enter risk capital to run" : "Run simulation";
 
   const runBtn = (
-    <button onClick={simulate} disabled={runDisabled}
-      style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none", background: runDisabled ? DIM : GOLD, color: runDisabled ? MUTED : "#000", fontSize: 14, fontWeight: 700, cursor: runDisabled ? "not-allowed" : "pointer" }}>
+    <div className="run-toolbar"><button onClick={simulate} disabled={runDisabled}
+      style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none", background: runDisabled ? DIM : GOLD, color: runDisabled ? MUTED : "#000", fontSize: 14, fontWeight: 600, cursor: runDisabled ? "not-allowed" : "pointer" }}>
       {runLabel}
     </button>
+    {stale && <p role="status" style={{color:GOLD,fontSize:13}}>Inputs changed — rerun to update results.</p>}
+    </div>
   );
 
   const zoneStrip = (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 16 }}>
+    <div className="zone-strip" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 16 }}>
       {zones.map(z => (
         <div key={z.name} style={{ background: SURFACE, border: `1px solid ${z.color}55`, borderRadius: 10, padding: "12px 10px" }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: z.color }}>{z.name}</div>
@@ -424,8 +311,8 @@ export default function App() {
     </div>
   );
 
-  const milestones = summary && (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+  const milestones = !stale && summary && (
+    <div className="result-metrics" style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 10 }}>
         <div style={{ background: SURFACE, border: `1px solid ${GREEN}33`, borderRadius: 10, padding: "10px 14px" }}>
           <div style={{ fontSize: 11, color: MUTED, marginBottom: 3 }}>Reached Milestone #2</div>
@@ -451,7 +338,7 @@ export default function App() {
               <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
                 <div>
                   <div style={{ fontSize: 28, fontWeight: 600, color: TEXT, lineHeight: 1 }}>{avg}</div>
-                  <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>avg trades</div>
+                  <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>avg opportunities</div>
                 </div>
                 <div>
                   <div style={{ fontSize: 22, fontWeight: 500, color: MUTED, lineHeight: 1 }}>{med}</div>
@@ -462,7 +349,7 @@ export default function App() {
                   <div style={{ fontSize: 11, color: DIM, marginTop: 3 }}>≈ days</div>
                 </div>
               </div>
-              <div style={{ fontSize: 12, color: DIM, marginTop: 10 }}>Range {min}–{max} trades · {hit}/{summary.total} paths touched</div>
+              <div style={{ fontSize: 12, color: DIM, marginTop: 10 }}>Range {min}–{max} opportunities · {hit}/{summary.total} paths touched</div>
               {failed > 0 && (
                 <div style={{ fontSize: 11, color: RED, marginTop: 4 }}>⚠ {failed} touched but later drew down</div>
               )}
@@ -473,14 +360,14 @@ export default function App() {
     </div>
   );
 
-  const chart = results && summary && chartData.length > 0 && (
-    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: "18px 8px 14px 0" }}>
+  const chart = !stale && results && summary && chartData.length > 0 && (
+    <div className="equity-chart" style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: "18px 8px 14px 0" }}>
       <div style={{ fontSize: 13, color: TEXT, marginLeft: 20, marginBottom: 3, fontWeight: 500 }}>Equity percentile bands</div>
-      <div style={{ fontSize: 12, color: MUTED, marginLeft: 20, marginBottom: 14 }}>1,000 paths · winners freeze at target · chart ends when median crosses +{ms2}%</div>
-      <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={chartData} margin={{ left: 10, right: 44, top: 4, bottom: 4 }}>
+      <div style={{ fontSize: 12, color: MUTED, marginLeft: 20, marginBottom: 14 }}>All 1,000 paths retained, including failures · terminal values freeze · chart ends if median crosses +{ms2}%</div>
+      <ResponsiveContainer width="100%" height={mobile ? 290 : 350}>
+        <LineChart data={chartData} margin={{ left: 10, right: 44, top: 4, bottom: 24 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={BORDER} />
-          <XAxis dataKey="trade" tick={{ fontSize: 11, fill: MUTED }} label={{ value: "Trades", position: "insideBottomRight", offset: -8, fontSize: 12, fill: MUTED }} />
+          <XAxis dataKey="trade" tick={{ fontSize: 11, fill: MUTED }} label={{ value: "Opportunities", position: "insideBottomRight", offset: -8, fontSize: 12, fill: MUTED }} />
           <YAxis tickFormatter={v => v + "%"} tick={{ fontSize: 11, fill: MUTED }} domain={["dataMin - 5", "dataMax + 5"]} />
           <Tooltip content={<ChartTooltip />} />
           <ReferenceLine y={0} stroke={BORDER} />
@@ -517,7 +404,7 @@ export default function App() {
     <>
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: MUTED, marginBottom: 6 }}>Risk capital ($)</div>
-        <input type="number" value={riskCapital} onChange={e => setRiskCapital(e.target.value)} min={0} step={1000}
+        <input aria-label="Risk capital dollars" type="number" value={riskCapital} onChange={e => setRiskCapital(e.target.value)} min={0} step={1000}
           style={{ width: "100%", background: CARD, border: `1px solid ${!rcValid ? RED : BORDER}`, borderRadius: 8, color: TEXT, fontSize: 16, fontWeight: 500, padding: "9px 12px", boxSizing: "border-box", outline: "none" }} />
         {!rcValid && <div style={{ fontSize: 11, color: RED, marginTop: 3 }}>Required · enter a positive amount</div>}
       </div>
@@ -530,19 +417,21 @@ export default function App() {
       <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "9px 12px", marginBottom: 14 }}>
         <span style={{ fontSize: 12, color: MUTED }}>Simulation runs fixed at </span>
         <span style={{ fontSize: 12, color: GOLD, fontWeight: 600 }}>1,000 paths</span>
-        <span style={{ fontSize: 12, color: MUTED }}> for maximum accuracy.</span>
+        <span style={{ fontSize: 12, color: MUTED }}> per run; estimates depend on model assumptions.</span>
       </div>
 
+      <StepInput label="Random seed" value={seed} min={0} max={4294967295} step={1} onChange={v=>setSeed(Math.floor(v))} allowType />
+      <div style={{fontSize:12,color:MUTED,marginBottom:14}}>Same seed and parameters reproduce the same run.</div>
       <SectionLabel>Milestones (% of risk capital)</SectionLabel>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 5 }}>Milestone #1</div>
-          <ClearableNumInput value={ms1} onChange={handleMs1Change} min={1} max={ms2 - 1} color={GREEN} />
+          <ClearableNumInput label="Milestone 1 percent" value={ms1} onChange={handleMs1Change} min={1} max={ms2 - 1} color={GREEN} />
           {ms1Error && <div style={{ fontSize: 11, color: RED, marginTop: 3 }}>Must be less than Milestone #2</div>}
         </div>
         <div>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 5 }}>Milestone #2</div>
-          <ClearableNumInput value={ms2} onChange={handleMs2Change} min={ms1 + 1} max={999} color={GOLD} />
+          <ClearableNumInput label="Milestone 2 percent" value={ms2} onChange={handleMs2Change} min={ms1 + 1} max={999} color={GOLD} />
           {ms2Error && <div style={{ fontSize: 11, color: RED, marginTop: 3 }}>Must be greater than #1</div>}
         </div>
       </div>
@@ -576,9 +465,9 @@ export default function App() {
       </div>
 
       <div style={{ background: CARD, border: `1px solid ${ev > 0 ? GREEN : RED}44`, borderRadius: 10, padding: "12px 14px" }}>
-        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Expected value / trade <span style={{ color: DIM }}>({strategy})</span></div>
-        <div style={{ fontSize: 22, fontWeight: 600, color: ev > 0 ? GREEN : RED }}>{ev > 0 ? "+" : ""}{ev.toFixed(2)}R</div>
-        <div style={{ fontSize: 12, color: ev > 0 ? GREEN : RED, marginTop: 2 }}>{ev > 0 ? "Positive edge" : "Negative edge — review inputs"}</div>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Expected value / trade · {evZone.name} <span style={{ color: DIM }}>({strategy})</span></div>
+        <div style={{ fontSize: 30, fontWeight: 500, color: ev > 0 ? GREEN : RED }}>{ev > 0 ? "+" : ""}{ev.toFixed(2)}R</div>
+        <div style={{ fontSize: 12, color: ev > 0 ? GREEN : RED, marginTop: 2 }}>{ev > 0 ? "Positive under these assumptions" : "Non-positive under these assumptions"}</div>
       </div>
     </>
   );
@@ -586,7 +475,7 @@ export default function App() {
   const zoneConfig = (
     <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18 }}>
       <SectionLabel>Zone configuration</SectionLabel>
-      <div style={{ fontSize: 12, color: DIM, marginBottom: 12 }}>Max R = zone width ÷ risk %. Sprint uses synthetic width of {SPRINT_SYNTHETIC_WIDTH} (= 7R cap per protocol).</div>
+      <div style={{ fontSize: 12, color: DIM, marginBottom: 12 }}>Max R = zone width ÷ risk %. Sprint uses synthetic width of {SPRINT_SYNTHETIC_WIDTH} ÷ configured risk %.</div>
       <div style={{ display: "grid", gridTemplateColumns: "56px 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
         {["Zone","Start %","Risk %","Max R"].map(h => <div key={h} style={{ fontSize: 11, color: DIM, textAlign: h !== "Zone" ? "right" : "left", fontWeight: 500 }}>{h}</div>)}
       </div>
@@ -595,8 +484,8 @@ export default function App() {
           <div style={{ fontSize: 13, fontWeight: 600, color: z.color }}>{z.name}</div>
           {i === 0
             ? <div style={{ fontSize: 13, color: DIM, textAlign: "right", paddingRight: 4 }}>0%</div>
-            : <NumInput value={rawZones[i].minPct} min={rawZones[i-1].minPct + 0.5} max={i < rawZones.length - 1 ? rawZones[i+1]?.minPct - 0.5 : 99} step={0.5} onChange={v => updateZone(i,"minPct",v)} />}
-          <NumInput value={rawZones[i].riskPct} min={0.1} max={20} step={0.1} onChange={v => updateZone(i,"riskPct",v)} />
+            : <NumInput label={`${z.name} start percent`} value={rawZones[i].minPct} min={rawZones[i-1].minPct + 0.5} max={i < rawZones.length - 1 ? rawZones[i+1]?.minPct - 0.5 : 99} step={0.5} onChange={v => updateZone(i,"minPct",v)} />}
+          <NumInput label={`${z.name} risk percent`} value={rawZones[i].riskPct} min={0.1} max={20} step={0.1} onChange={v => updateZone(i,"riskPct",v)} />
           <div style={{ fontSize: 13, fontWeight: 600, color: z.color, textAlign: "right", paddingRight: 4 }}>{z.maxR}R</div>
         </div>
       ))}
@@ -604,52 +493,77 @@ export default function App() {
     </div>
   );
 
-  const placeholder = (h, msg, col) => (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: h, background: SURFACE, borderRadius: 12, border: `1px solid ${BORDER}`, color: col || DIM, fontSize: 14, textAlign: "center", padding: "0 20px" }}>{msg}</div>
+  const placeholder = (h, msg, col = undefined) => (
+    <div className="simulation-empty" style={{minHeight:h,color:col||MUTED}}>
+      <div className="empty-orbit" aria-hidden="true"><span/><span/><span/></div>
+      <div className="section-eyebrow">Explore the possibilities</div>
+      <h2>{running ? "Calculating the range…" : stale ? "A new set of possibilities." : "One model. A thousand paths."}</h2>
+      <p>{msg}</p>
+      {!running && <div className="empty-steps"><span>01 · Set your assumptions</span><span>02 · Run the paths</span><span>03 · Compare the outcomes</span></div>}
+    </div>
   );
 
-  // ── Layout ────────────────────────────────────────────────────
-
-  return (
-    <div style={{ background: BG, minHeight: "100vh", padding: mobile ? "16px 14px 48px" : "24px 24px 48px", fontFamily: "var(--font-sans)", color: TEXT, boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 600, color: TEXT }}>Risk Capital Simulator</div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 3 }}>Dynamic zone model · 1,000-path Monte Carlo</div>
+  function saveScenario() {
+    if (!summary || stale || running) return;
+    const next = [{ name: scenarioName.trim() || `Scenario ${scenarios.length + 1}`, savedAt: new Date().toISOString(), inputs: runInputs, summary }, ...scenarios].slice(0, 6);
+    try { localStorage.setItem("rcs:scenarios:v1", JSON.stringify(next)); setScenarios(next); setSaveMessage("Saved on this device. Up to six recent scenarios are kept."); setScenarioName(""); }
+    catch { setSaveMessage("Could not save: browser storage is unavailable."); }
+  }
+  const comparison = (
+    <section className="scenario-library" aria-label="Scenario comparison" style={{marginTop:24,padding:18,background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12}}>
+      <div className="section-eyebrow">Your research notebook</div><h2 style={{fontSize:24,fontFamily:"Georgia,serif",fontWeight:400,margin:"8px 0 20px"}}>Compare saved scenarios</h2>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <input aria-label="Scenario name" placeholder="Name this run" value={scenarioName} maxLength={80} onChange={e=>setScenarioName(e.target.value)} style={{background:CARD,color:TEXT,padding:10,border:`1px solid ${BORDER}`,borderRadius:6,minWidth:0}} />
+        <button disabled={!summary||stale||running} onClick={saveScenario}>Save current results</button>
       </div>
+      <p role="status" style={{color:MUTED,fontSize:12}}>{saveMessage || "Save a completed run, change parameters, then rerun to compare. Stored only in this browser."}</p>
+      {scenarios.length > 0 && <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13,textAlign:"left"}}>
+        <thead><tr>{["Scenario","Inputs","Reached target","Drawdown","Unfinished"].map(h=><th key={h} style={{padding:10,borderBottom:`1px solid ${BORDER}`}}>{h}</th>)}</tr></thead>
+        <tbody>{scenarios.map((s,i)=><tr key={s.savedAt+i}>
+          <th style={{padding:10}}>{s.name}</th>
+          <td style={{padding:10}}>{s.inputs.strategy} · {Math.round(s.inputs.winRate*100)}% wins · {s.inputs.avgR}R · target +{s.inputs.ms2}%<details><summary>All inputs</summary><pre style={{whiteSpace:"pre-wrap",maxWidth:350}}>{JSON.stringify(s.inputs,null,2)}</pre></details></td>
+          <td style={{padding:10}}>{(s.summary.hit2/s.summary.total*100).toFixed(1)}%</td>
+          <td style={{padding:10}}>{(s.summary.drawdown/s.summary.total*100).toFixed(1)}%</td>
+          <td style={{padding:10}}>{(s.summary.maxOut/s.summary.total*100).toFixed(1)}%</td>
+        </tr>)}</tbody>
+      </table></div>}
+    </section>
+  );
 
-      {mobile ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18 }}>
-            <SectionLabel>Parameters</SectionLabel>
-            {controls}
-          </div>
-          {zoneConfig}
-          {zoneStrip}
+  // Layout shares one set of controls across desktop and mobile.
+  return (
+    <div className="sim-shell">
+      <header className="suite-header">
+        <a className="suite-brand" href="./"><span className="suite-mark">R</span><span>Risk Capital Simulator<small>A workspace for what could happen.</small></span></a>
+        <nav className="suite-nav" aria-label="Apps"><a href="../sessionprotocol/">Session</a><a href="../goldenbullet/">Challenge</a><a href="../riskcapitalsimulator/" aria-current="page">Simulator</a></nav>
+        <span className="local-tag">Runs in your browser</span>
+      </header>
+      <section className="sim-hero">
+        <div><div className="section-eyebrow">Risk & possibility</div><h1>See the range.<br/><em>Understand the risk.</em></h1><p>Explore how your assumptions shape the outcome.<br className="desktop-break"/> Compare the possibilities before making a decision.</p></div>
+        <div className="run-spec"><div><strong>1,000</strong><span>paths per scenario</span></div><div><strong>500</strong><span>opportunity horizon</span></div><span className="run-state">{running ? "Simulation running" : stale ? "Inputs changed" : results ? "Scenario complete" : "Ready to explore"}</span></div>
+      </section>
+      <div className="sim-layout">
+        <aside className="sim-controls">
           {runBtn}
-          {!results && !running && placeholder(140, rcValid ? "Run simulation to see results" : "Enter risk capital to begin")}
-          {running && placeholder(140, "Running 1,000 paths…", GOLD)}
-          {!running && milestones}
+          <details className="control-panel" open={!mobile}>
+            <summary><span><small>01 / CONFIGURE</small>Scenario parameters</span><span className="expand-sign" aria-hidden="true">+</span></summary>
+            <div className="control-panel-body">{controls}</div>
+          </details>
+          <details className="control-panel zone-editor"><summary><span><small>OPTIONAL / REFINE</small>Risk zone settings</span><span className="expand-sign" aria-hidden="true">+</span></summary><div className="control-panel-body">{zoneConfig}</div></details>
+          <details className="model-notes"><summary>What this model assumes</summary><p>Independent wins/losses, fixed win rate and risk based on starting capital. Free Ride and Pyramid use simplified payoffs, without fees, slippage or intratrade price paths. Auto-zone EV is for the starting Shield zone. The axis counts opportunities, including suspension slots; day estimates are approximate. This is a scenario model, not a forecast.</p></details>
+        </aside>
+        <main className="sim-results">
+          <div className="results-heading"><div><div className="section-eyebrow">02 / EXPLORE</div><h2>Your outcome landscape</h2></div><span>{strategy} · {Math.round(winRate*100)}% wins</span></div>
+          {zoneStrip}
+          {!results && !running && placeholder(380, rcValid ? "Set your parameters, then run a simulation to see the full range of outcomes." : "Enter positive risk capital to begin.")}
+          {stale && !running && placeholder(320,"Your assumptions have changed. Run the simulation to see updated outcomes.")}
+          {running && placeholder(320,"Evaluating 1,000 possible paths with your current assumptions.",GOLD)}
           {!running && chart}
-        </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 18, alignItems: "start" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18 }}>
-              <SectionLabel>Parameters</SectionLabel>
-              {controls}
-            </div>
-            {zoneConfig}
-            {runBtn}
-          </div>
-          <div>
-            {zoneStrip}
-            {!results && !running && placeholder(320, rcValid ? "Set parameters and run simulation" : "Enter risk capital to begin")}
-            {running && placeholder(320, "Running 1,000 paths…", GOLD)}
-            {!running && milestones}
-            {!running && chart}
-          </div>
-        </div>
-      )}
+          {!running && milestones}
+          {comparison}
+        </main>
+      </div>
+      <footer className="app-footer">Designed for deliberate decisions. <span>Scenario research · saved locally</span></footer>
     </div>
   );
 }
